@@ -147,7 +147,7 @@ extension ViewController : PHPickerViewControllerDelegate {
         // 위의 PHPickerConfiguration에서 사용하기 위해서 입니다.
         selectedAssetIdentifiers = results.compactMap { $0.assetIdentifier }
         
-        // 만약 비어있다면 스택뷰 초기화, selection이 하나라도 있다면 displayImage 실행
+        // 👉 만약 비어있다면 스택뷰 초기화, selection이 하나라도 있다면 displayImage 실행
         if selections.isEmpty {
             stackView.arrangedSubviews.forEach { $0.removeFromSuperview() }
         } else {
