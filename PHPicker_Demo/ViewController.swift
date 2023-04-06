@@ -13,10 +13,8 @@ class ViewController: UIViewController {
     
     // Identifier와 PHPickerResult로 만든 Dictionary
     private var selections = [String : PHPickerResult]()
-    // 선택한 사진의 Identifier들을 담아줄 것입니다.
+    // 선택한 사진의 순서에 맞게 배열로 Identifier들을 저장해줄 겁니다. (딕셔너리는 순서가 없기 때문에)
     private var selectedAssetIdentifiers = [String]()
-    // 순서있는 작업을 위해서 시퀀스를 만들어 줘야합니다.
-    private var selectedAssetIdentifierIterator: IndexingIterator<[String]>?
     
     lazy var stackView: UIStackView = {
         let stack = UIStackView()
@@ -52,18 +50,6 @@ class ViewController: UIViewController {
         presentPicker()
     }
     
-    private func addImage(_ image: UIImage) {
-        let imageView = UIImageView()
-        imageView.image = image
-        
-        imageView.snp.makeConstraints {
-            $0.width.height.equalTo(200)
-        }
-        
-        stackView.addArrangedSubview(imageView)
-    }
-    
-    
     private func presentPicker() {
         // 이미지의 Identifier를 사용하기 위해서는 초기화를 shared로 해줘야 합니다.
         var config = PHPickerConfiguration(photoLibrary: .shared())
@@ -75,7 +61,7 @@ class ViewController: UIViewController {
         config.selection = .ordered
         // 잘은 모르겠지만, current로 설정하면 트랜스 코딩을 방지한다고 하네요!?
         config.preferredAssetRepresentationMode = .current
-        // 이 동작이 있어야 PHPicker를 실행 시, 선택했던 이미지를 기억해 표시할 수 있다. (델리게이트 코드 참고)
+        // 이 동작이 있어야 Picker를 실행 시, 선택했던 이미지를 기억해 표시할 수 있다. (델리게이트 코드 참고)
         config.preselectedAssetIdentifiers = selectedAssetIdentifiers
         
         // 만든 Configuration를 사용해 PHPicker 컨트롤러 객체 생성
@@ -87,70 +73,91 @@ class ViewController: UIViewController {
     
     
     private func displayImage() {
-        
         // 처음 스택뷰의 서브뷰들을 모두 제거함
         self.stackView.arrangedSubviews.forEach { $0.removeFromSuperview() }
         
-        for identifier in selectedAssetIdentifiers {
+        let dispatchGroup = DispatchGroup()
+        // identifier와 이미지로 dictionary를 만듬 (selectedAssetIdentifiers의 순서에 따라 이미지를 받을 예정입니다.)
+        var imagesDict = [String: UIImage]()
+
+        for (identifier, result) in selections {
             
-            guard let result = selections[identifier] else { return }
-            
+            dispatchGroup.enter()
+                        
             let itemProvider = result.itemProvider
             // 만약 itemProvider에서 UIImage로 로드가 가능하다면?
             if itemProvider.canLoadObject(ofClass: UIImage.self) {
-                print("처음 \(identifier)")
-                let a = itemProvider.registeredTypeIdentifiers
-                print(a)
-                itemProvider.loadObject(ofClass: UIImage.self) { [weak self] image, error in
+                // 로드 핸들러를 통해 UIImage를 처리해 줍시다. (비동기적으로 동작)
+                itemProvider.loadObject(ofClass: UIImage.self) { image, error in
                     
-                    print("중간 \(identifier)")
+                    guard let image = image as? UIImage else { return }
                     
-                    guard let self = self,
-                          let image = image as? UIImage else { return }
-                    
-                    DispatchQueue.main.async {
-                        self.addImage(image)
-                        print("마지막 \(identifier)")
-                    }
+                    imagesDict[identifier] = image
+                    dispatchGroup.leave()
                 }
             }
         }
+        
+        dispatchGroup.notify(queue: DispatchQueue.main) { [weak self] in
+            
+            guard let self = self else { return }
+            
+            for identifier in self.selectedAssetIdentifiers {
+                guard let image = imagesDict[identifier] else { return }
+                self.addImage(image)
+            }
+        }
+    }
+    
+    
+    private func addImage(_ image: UIImage) {
+        
+        let imageView = UIImageView()
+        imageView.image = image
+        
+        imageView.snp.makeConstraints {
+            $0.width.height.equalTo(200)
+        }
+        
+        self.stackView.addArrangedSubview(imageView)
     }
 }
 
 
 
 extension ViewController : PHPickerViewControllerDelegate {
-    // picker가 종료되면 동작 함
+    // picker가 종료되면 동작 합니다.
     func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
         
         // picker가 선택이 완료되면 화면 내리기
         picker.dismiss(animated: true)
         
-        // 기존에 선택했던 PHPickerResult를 넣어 줍니다. (처음은 당연히 [:] 이므로 nil)
-        let existingSelection = self.selections
-        // Picker의 동작이 완료 된 후 result를 담아줄 변수를 생성
-        var newSelection = [String: PHPickerResult]()
+        // Picker의 작업이 끝난 후, 새로 만들어질 selections을 담을 변수를 생성
+        var newSelections = [String: PHPickerResult]()
         
         for result in results {
             let identifier = result.assetIdentifier!
-            // 처음에는 무조건 newSelection에 result 값을 담아주고,
-            // 그 다음부터는 selection값이 존재하면 재사용, 존재하지 않으면 result 사용해서 담아줍니다.
-            newSelection[identifier] = existingSelection[identifier] ?? result
+            // ⭐️ 여기는 WWDC에서 3분 부분을 참고하세요. (Picker의 사진의 저장 방식)
+            newSelections[identifier] = selections[identifier] ?? result
         }
         
-        // 새로 만들어진 newSelection을 사용
-        selections = newSelection
+        // selections에 새로 만들어진 newSelection을 넣어줍시다.
+        selections = newSelections
+        // Picker에서 선택한 이미지의 Identifier들을 저장 (assetIdentifier은 옵셔널 값이라서 compactMap 받음)
+        // 위의 PHPickerConfiguration에서 사용하기 위해서 입니다.
+        selectedAssetIdentifiers = results.compactMap { $0.assetIdentifier }
         
-        // Picker에 선택한 이미지의 Identifier를 저장해준다. (keyPath를 통해 접근하여 map으로 변환해 줌)
-        // 위의 PHPickerConfiguration에서 사용하기 위함
-        selectedAssetIdentifiers = results.map(\.assetIdentifier!)
-        // 시퀀스를 만들기 위해 makeIterator를 사용
-        selectedAssetIdentifierIterator = selectedAssetIdentifiers.makeIterator()
-        
-        // 만약 selection이 하나라도 있다면 displayImage 실행
-        if !selections.isEmpty {
+        // 만약 비어있다면 스택뷰 초기화, selection이 하나라도 있다면 displayImage 실행
+        if selections.isEmpty {
+            stackView.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        } else {
             displayImage()
         }
     }
 }
+
+
+// 9F983DBA
+// B84E8479
+// 106E99A1
+
